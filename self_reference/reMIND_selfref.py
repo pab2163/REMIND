@@ -22,12 +22,20 @@ import time
 _thisDir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_thisDir)
 
+
+b1=['semantic', 'self', 'other',  'other', 'self',  'other', 'self',  'self', 'other','semantic']
+b2=['self', 'other',  'other', 'semantic', 'self',  'other', 'semantic', 'self',  'self', 'other']
+b3=['other', 'self', 'semantic',  'self', 'other',  'self', 'other',  'semantic', 'other','self']
+
+block_versions = [b1, b2, b3]
+random.shuffle(block_versions)
+
 block_order = pd.DataFrame({'block': np.arange(10), 
-    'block_type': ['positive', 'self', 'other',  'other', 'self',  'other', 'self',  'self', 'other','positive']})
+    'block_type': block_versions[0]})
 
 # Store info about the experiment session
 expName = 'task-selfref_run-01'  # from the Builder filename that created this script
-expInfo = {'participant':'', 'session':1, 'run':1}
+expInfo = {'participant':'', 'session':1, 'run':1, 'friend_name':''}
 dlg = gui.DlgFromDict(dictionary=expInfo, title=expName)
 if dlg.OK == False: core.quit()  # user pressed cancel
 expInfo['date'] = data.getDateStr()  # add a simple timestamp
@@ -40,14 +48,13 @@ if not os.path.exists(f"{_thisDir}/reMIND/{expInfo['participant']}"):
     os.mkdir(f"{_thisDir}/reMIND/{expInfo['participant']}")
 
 # pull word order for the participant
-participant_number = int(expInfo['participant'].replace('remind-', ''))
+participant_number = int(expInfo['participant'][-3:])
 word_order_file = f"word_list_splits/word_order_{participant_number}.csv"
 word_order = pd.read_csv(word_order_file)
 word_list = word_order[word_order.run == expInfo['run']]
-#print(word_list)
 
-negative_words = list(word_list.word[word_list.valence_condition == 'negative'])
-positive_words = list(word_list.word[word_list.valence_condition == 'positive']) 
+negative_words = list(word_list.word[word_list.valence_condition == '-'])
+positive_words = list(word_list.word[word_list.valence_condition == '+']) 
 random.shuffle(positive_words)
 random.shuffle(negative_words)
 practice_words = ['polite', 'bossy', 'rude', 'cool', 'nice', 'jealous']
@@ -63,7 +70,7 @@ def write_to_tsv(row_info:list):
         stim_writer = csv.writer(csvfile, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
         stim_writer.writerow(row_info)
  
-write_to_tsv(['participant','session', 'date', 'exp_name', 'frame_rate', 'absolute_time', 'trigger_time', 'trial_type', 'trial_num', 'word', 'response_time','reponse_key'])
+write_to_tsv(['participant','session', 'date', 'exp_name', 'frame_rate', 'absolute_time', 'trigger_time', 'trial_type', 'trial_num', 'word', 'response_time','reponse_key', 'condition', 'word_valence'])
 
 # Data file name stem = absolute path + name; later add .psyexp, .csv, .log, etc
 logFile = logging.LogFile(filename+'.log', level=logging.EXP)
@@ -80,7 +87,8 @@ win = visual.Window(size=(1920, 1080), fullscr=True, screen=1, allowGUI=False, a
 # Initialize components for Routine "instruct"
 instructClock = core.Clock()
 instruct_text = visual.TextStim(win=win, ori=0, name='instruct_text',
-    text=u'Welcome!\n\n Next, you will see a set of adjectives.\n\n Then please make a yes / no decision about each word', font='Arial',
+    text=u"Welcome!\n\nDuring this task you'll answer a series of YES or NO questions.\
+\n\nYou'll have a chance to answer 3 different types of questions.", font='Arial',
     pos=[0.0, 0], height=0.08, wrapWidth=1.5,
     color='white', colorSpace='rgb', opacity=1,
     depth=0.0)
@@ -119,13 +127,13 @@ word = visual.TextStim(win=win, ori=0, name='word',
     depth=-1.0)
 
 yes = visual.TextStim(win=win, ori=0, name='word',
-    text='yes',    font=u'Arial',
+    text='YES',    font=u'Arial',
     pos=[0.7, -.8], height=0.2, wrapWidth=None,
     color=u'white', colorSpace='rgb', opacity=1,
     depth=-1.0)
 
 no = visual.TextStim(win=win, ori=0, name='word',
-    text='no',    font=u'Arial',
+    text='NO',    font=u'Arial',
     pos=[-0.7, -.8], height=0.2, wrapWidth=None,
     color=u'white', colorSpace='rgb', opacity=1,
     depth=-1.0)
@@ -156,7 +164,7 @@ def run_instructions():
     win.flip()
     wait_for_keypress(['space'])
     write_to_tsv([expInfo['participant'],expInfo['session'], expInfo['date'], 
-                    expName, expInfo['frameRate'], time.time(), '', 'instructions', '', '', '',''])
+                    expName, expInfo['frameRate'], time.time(), '', 'instructions', '', '', '','', '', ''])
 
 
 def wait_for_keypress(key_list:list):
@@ -188,28 +196,33 @@ def get_trigger():
                 # a response ends the routine
                 continueRoutine = False
                 write_to_tsv([expInfo['participant'],expInfo['session'], expInfo['date'], 
-                    expName, expInfo['frameRate'], time.time(), 0, 'trigger', '', '', '',''])
+                    expName, expInfo['frameRate'], time.time(), 0, 'trigger', '', '', '','', '', ''])
 
 '''
 Run a block of trials
 '''
 def run_block(n_trials, block_type, block_number, practice=False):
-    if block_type == 'positive':
+    if block_type == 'semantic':
         block_type_text.setText(f'Is the word positive?')
     elif block_type == 'self':
         block_type_text.setText(f'Does this word describe you?')
     elif block_type == 'other':
-        block_type_text.setText(f'Does this word describe your friend?')
+        block_type_text.setText(f'Does this word describe {expInfo["friend_name"]}?')
     block_type_text.height = 0.2    
     block_type_text.draw()
     win.flip()
-    core.wait(block_intro_time)
-    if block_type == 'positive':
+    
+    # Show questions for longer during practice
+    if not practice:
+        core.wait(block_intro_time)
+    elif practice:
+        core.wait(4)
+    if block_type == 'semantic':
         block_type_text.setText(f'Is this word positive?')
     elif block_type == 'self':
         block_type_text.setText(f'Are you?')
     elif block_type == 'other':
-        block_type_text.setText(f'Is your friend?')
+        block_type_text.setText(f'Is {expInfo["friend_name"]}?')
     block_type_text.height = 0.08
     if not practice:
         # get timings just for the current block
@@ -218,7 +231,7 @@ def run_block(n_trials, block_type, block_number, practice=False):
 
         # run each trial in the block, pulling the word type (positive vs. negative) and fixation duration (ISI) from the block_timing_frame
         for trial_num in range(n_trials):
-            run_trial(trial_type = block_timing_frame.stim_type[trial_num], fixation_duration= block_timing_frame.fix_duration[trial_num])
+            run_trial(trial_type = block_timing_frame.stim_type[trial_num], fixation_duration= block_timing_frame.fix_duration[trial_num],practice=False, block_type=block_type)
 
 '''
 Show a fixation cross 
@@ -231,13 +244,13 @@ def run_fixation(duration):
     fix_time.start(duration) 
     fix_time.complete() 
     write_to_tsv([expInfo['participant'],expInfo['session'], expInfo['date'], 
-                    expName, expInfo['frameRate'], time.time(), triggerClock.getTime(), 'fixation', 1, '', '',''])
+                    expName, expInfo['frameRate'], time.time(), triggerClock.getTime(), 'fixation', 1, '', '','', '', ''])
     event.clearEvents(eventType='keyboard')
 
 '''
 Run a single trial
 '''
-def run_trial(trial_type, fixation_duration, practice=False):
+def run_trial(trial_type, fixation_duration, practice=False, block_type=''):
     
     # fixation at beginning of trial
     run_fixation(duration=fixation_duration)
@@ -263,7 +276,7 @@ def run_trial(trial_type, fixation_duration, practice=False):
     win.flip()
     if not practice:
         write_to_tsv([expInfo['participant'],expInfo['session'], expInfo['date'], 
-                        expName, expInfo['frameRate'], time.time(), triggerClock.getTime(), 'word_presentation', 1, trial_word, '', ''])
+                        expName, expInfo['frameRate'], time.time(), triggerClock.getTime(), 'word_presentation', 1, trial_word, '', '', block_type, trial_type])
     
     # get participant button press response for word
     continueRoutine = True
@@ -279,7 +292,7 @@ def run_trial(trial_type, fixation_duration, practice=False):
                 if not practice:  
                     write_to_tsv([expInfo['participant'],expInfo['session'], expInfo['date'], 
                                     expName, expInfo['frameRate'], time.time(), triggerClock.getTime(), 'response', 1, 
-                                    trial_word, trial_clock.getTime(), theseKeys[0]])
+                                    trial_word, trial_clock.getTime(), theseKeys[0], block_type, trial_type])
                 # change color of selected word
                 if '2' in theseKeys:
                     no.bold = True
@@ -303,14 +316,14 @@ def run_trial(trial_type, fixation_duration, practice=False):
 
 
 def run_practice():
-    instruct_text.setText('Each time you see a word, you will be asked to make one of the following decisions:\
-        \n\n\n1) Does the word describe you? \
-        \n\n 2) Does the word describe your friend? \
-        \n\n 3) Is the word positive?')
+    instruct_text.setText(f'The 3 types of YES or NO questions you will see will be:\
+\n\n1) Does a word describe you?\
+\n\n2) Does a word describe {expInfo["friend_name"]} (who you mentioned earlier)?\
+\n\n3) Is a word positive?')
     instruct_text.draw()
     win.flip()
     wait_for_keypress(key_list=['space'])
-    instruct_text.setText('Each time you see a word:\
+    instruct_text.setText('Each time you answer a question:\
         \n\n\npress with your index finger to answer NO\n\npress with your middle finger to answer YES')
     instruct_text.draw()
     win.flip()
@@ -330,15 +343,17 @@ def run_practice():
     instruct_text.draw()
     win.flip()
     wait_for_keypress(key_list=['space'])
+
+    # Run actual practice trials
     run_block(n_trials = 0, block_type = 'self', block_number = 0, practice = True)
-    run_trial(trial_type = 'self', fixation_duration=1, practice = True)
-    run_trial(trial_type = 'self', fixation_duration=1, practice = True)
+    run_trial(trial_type = 'self', fixation_duration=1, practice = True, block_type = 'self')
+    run_trial(trial_type = 'self', fixation_duration=1, practice = True, block_type = 'self')
     run_block(n_trials = 0, block_type = 'other', block_number = 0, practice = True)
-    run_trial(trial_type = 'other', fixation_duration=1, practice = True)
-    run_trial(trial_type = 'other', fixation_duration=1, practice = True)
-    run_block(n_trials = 0, block_type = 'positive', block_number = 0, practice = True)
-    run_trial(trial_type = 'positive', fixation_duration=1, practice = True)
-    run_trial(trial_type = 'positive', fixation_duration=1, practice = True)
+    run_trial(trial_type = 'other', fixation_duration=1, practice = True, block_type = 'other')
+    run_trial(trial_type = 'other', fixation_duration=1, practice = True, block_type = 'other')
+    run_block(n_trials = 0, block_type = 'semantic', block_number = 0, practice = True)
+    run_trial(trial_type = 'positive', fixation_duration=1, practice = True, block_type = 'semantic')
+    run_trial(trial_type = 'positive', fixation_duration=1, practice = True, block_type = 'semantic')
     instruct_text.setText('Great job! Any questions on what to do?')
     instruct_text.draw()
     win.flip()
