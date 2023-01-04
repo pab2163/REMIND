@@ -11,9 +11,9 @@
 #Step 4: run murfi for realtime
 
 subj=$1
-ses=$2
-run=$3
-step=$4
+step=$2
+ses='ses-lo1'
+run='run-01'
 
 # Set initial paths
 subj_dir=../subjects/$subj
@@ -22,7 +22,6 @@ absolute_path=$(dirname $cwd)
 subj_dir_absolute="${absolute_path}/subjects/$subj"
 fsl_scripts=../scripts/fsl_scripts
 
-
 # Set paths & check that computers are properly connected with scanner via Ethernet
 if [ ${step} = setup ]
 then
@@ -30,7 +29,7 @@ then
     echo "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
     echo "+ Wellcome to MURFI real-time Neurofeedback"
     echo "+ running " ${step}
-    export MURFI_SUBJECTS_DIR=../subjects/
+    export MURFI_SUBJECTS_DIR="${absolute_path}/subjects/"
     export MURFI_SUBJECT_NAME=$subj
     echo "+ subject ID: "$MURFI_SUBJECT_NAME
     echo "+ working dir: $MURFI_SUBJECTS_DIR"
@@ -64,18 +63,22 @@ then
     latest_ref="${latest_ref::-4}"
     echo ${latest_ref}
     bet ${latest_ref} ${latest_ref}_brain -R -f 0.4 -g 0 -m # changed from -f 0.6
+    slices ${latest_ref}_brain ${latest_ref} -o $subj_dir/xfm/2vol_skullstrip_check.gif
 
     # CCCB version (direct flirt from subject functional to MNI structural: step 1)
     # because the images that we get from Prisma through Vsend are in LPS orientation we need to change both our MNI mean image and our mni masks accordingly: 
-    fslswapdim MNI152_T1_2mm.nii.gz x -y z MNI152_T1_2mm_LPS.nii.gz
-    fslorient -forceneurological MNI152_T1_2mm_LPS.nii.gz
+    #fslswapdim MNI152_T1_2mm.nii.gz x -y z MNI152_T1_2mm_LPS.nii.gz
+    #fslorient -forceneurological MNI152_T1_2mm_LPS.nii.gz
     # once the images are in the same orientation we can do registration
     rm -r $subj_dir/xfm/epi2reg
     mkdir $subj_dir/xfm/epi2reg
     mkdir $subj_dir/mask/lps
 
+    # warp MNI templates into native space
     flirt -in MNI152_T1_2mm_LPS.nii.gz -ref ${latest_ref} -out $subj_dir/xfm/epi2reg/mnilps2studyref -omat $subj_dir/xfm/epi2reg/mnilps2studyref.mat
     flirt -in MNI152_T1_2mm_LPS_brain.nii.gz -ref ${latest_ref}_brain -out $subj_dir/xfm/epi2reg/mnilps2studyref_brain -omat $subj_dir/xfm/epi2reg/mnilps2studyref.mat
+
+    slices $subj_dir/xfm/epi2reg/mnilps2studyref_brain ${latest_ref}_brain -o $subj_dir/xfm/MNI2_warp_to_2vol_native_check.gif
 
     # For each MNI mask in the participant's MNI mask directory, swap dimension & register to 2vol native space
     for mni_mask in {dmn,cen};
@@ -120,43 +123,79 @@ clear
     echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
     echo "+ compiling resting state run into analysis folder"
 
-    # get all volumes of resting data (no matter how many) merged into 1 .nii.gz file
-    # NOTE: the image-##### extension will likely need to be adjusted depending on where this scan falls in the protocol
-
-    # if run 0 has <=2 volumes (i.e. this was the 2vol run), use run 1
-    run_0_volumes=$(find ../subjects/${subj}/img/ -name "img-00000*" | wc -l)
-    if [ ${run_0_volumes} -le 2 ];
-    then
-        rest_run_num=1
-    else
-        rest_run_num=0
-    fi
-    echo "Using run ${rest_run_num}"
-    fslmerge -tr $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.nii.gz $subj_dir/img/img-0000${rest_run_num}* 1.2
-    
-    # make sure file permissisions are set so the resting-state data can be picked up by FSL
-    chmod 777 $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.nii.gz 
-
     expected_volumes=250
-    # figure out how many volumes of resting state data there were to be used in ICA
-    restvolumes=$(fslnvols $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.nii.gz)
-    if [ ${restvolumes} -ne ${expected_volumes} ]
+    # get all volumes of resting data (no matter how many) merged into 1 .nii.gz file
+    run_0_volumes=$(find ../subjects/${subj}/img/ -name "img-00000*" | wc -l)
+    run_1_volumes=$(find ../subjects/${subj}/img/ -name "img-00001*" | wc -l)
+
+    if [ ${run_0_volumes} -eq 250 ] && [ ${run_1_volumes} -eq 250 ];
     then
-        echo "WARNING! Only ${restvolumes} volumes of resting-state data found for ICA. ${expected_volumes} expected?"
+        rest_runA_num=0
+        rest_runB_num=1
+    else
+        runstring=''
+        for i in {0..10};
+        do
+            #echo $i
+            run_volumes=$(find ../subjects/${subj}/img/ -name "img-0000${i}*" | wc -l)
+            if [ ${run_volumes} -ne 0 ]
+            then
+                runstring="${runstring}\nRun ${i}: ${run_volumes} volumes"
+            fi
+        done
+
+        # use zenity to allow user to choose which resting volume to use
+        input_string=$(zenity --forms --title="Which resting state runs to use for ICA?" \
+            --separator=" " --width 600 --height 600 \
+            --add-entry="Run A" \
+            --add-entry="Run B" --text="`printf "${runstring}"`")
+
+
+        # parse zenity output using space as delimiter
+        read -a input_array <<< $input_string
+        rest_runA_num=${input_array[0]}
+        rest_runB_num=${input_array[1]}
+    fi
+    
+    echo "Using run ${rest_runA_num} and run ${rest_runB_num}"
+
+    # merge individual volumes to make 1 file for each resting state run
+    rest_runB_filename=$subj_dir_absolute/rest/$subj'_'$ses'_task-rest_run-01_bold'.nii.gz
+    rest_run2_filename=$subj_dir_absolute/rest/$subj'_'$ses'_task-rest_run-02_bold'.nii.gz 
+    fslmerge -tr $rest_runB_filename $subj_dir_absolute/img/img-0000${rest_runA_num}* 1.2
+    fslmerge -tr $rest_run2_filename $subj_dir_absolute/img/img-0000${rest_runB_num}* 1.2
+
+
+    # figure out how many volumes of resting state data there were to be used in ICA
+    restvolumes1=$(fslnvols $rest_runB_filename)
+    restvolumes2=$(fslnvols $rest_run2_filename)
+    if [ ${restvolumes1} -ne ${expected_volumes} ] || [ ${restvolumes2} -ne ${expected_volumes} ]; 
+    then
+        echo "WARNING! ${restvolumes1} volumes of resting-state data found for run 1."
+        echo "${restvolumes2} volumes of resting-state data found for run 2. ${expected_volumes} expected?"
+
+        # calculate minimum volumes (which run has fewer, then use fslroi to cut both runs to this minimum)
+        minvols=$(( run_0_volumes < run_1_volumes ? run_0_volumes : run_1_volumes ))
+        fslroi $rest_runB_filename $rest_runB_filename 0 $minvols
+        fslroi $rest_run2_filename $rest_run2_filename 0 $minvols
+        echo "Clipping runs so that both have ${minvols} volumes"
+    else
+        minvols=$expected_volumes
     fi
 
     echo "+ computing resting state networks this will take about 25 minutes"
     echo "+ started at: $(date)"
     
     # update FEAT template with paths and # of volumes of resting state run
-    cp $fsl_scripts/rest_template.fsf $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
-    DATA_path=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.nii.gz
-    OUTPUT_dir=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'
-    sed -i "s#DATA#$subj_dir_absolute/rest/${subj}_${ses}_task-rest_${run}_bold.nii.gz#g" $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
+    cp $fsl_scripts/rest_template.fsf $subj_dir_absolute/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
+    #DATA_path=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.nii.gz
+    OUTPUT_dir=$subj_dir_absolute/rest/rs_network
+    sed -i "s#DATA1#$rest_runB_filename#g" $subj_dir_absolute/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
+    sed -i "s#DATA2#$rest_run2_filename#g" $subj_dir_absolute/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
     sed -i "s#OUTPUT#$OUTPUT_dir#g" $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
 
     # update fsf to match number of rest volumes
-    sed -i "s/set fmri(npts) 248/set fmri(npts) ${restvolumes}/g" $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
+    sed -i "s/set fmri(npts) 250/set fmri(npts) ${minvols}/g" $subj_dir_absolute/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
     feat $subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.fsf
 fi
 
@@ -173,20 +212,21 @@ clear
 # Set up file paths needed for mask creation
 
 ## File to contain spatial correlations between ICs & template networks
-correlfile=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/template_rsn_correlations_with_ICs.txt
+ica_directory=$subj_dir/rest/rs_network.gica/groupmelodic.ica/
+correlfile=$ica_directory/template_rsn_correlations_with_ICs.txt
 touch ${correlfile}
 
 # ICs in native space
-infile=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/melodic_IC.nii.gz 
+infile=$ica_directory/melodic_IC.nii.gz 
 
 # ICs in 
-#infile_2mm=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/melodic_IC_2mm.nii.gz
+#infile_2mm=$ica_directory/melodic_IC_2mm.nii.gz
 
 # Template & transform matrices needed for registration
-examplefunc=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/example_func.nii.gz
-standard=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/standard.nii.gz
-example_func2standard_mat=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/example_func2standard.mat
-standard2example_func_mat=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/standard2example_func.mat
+#examplefunc=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/example_func.nii.gz
+#standard=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/standard.nii.gz
+#example_func2standard_mat=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/example_func2standard.mat
+#standard2example_func_mat=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/standard2example_func.mat
 template_networks='template_networks.nii.gz'
 
 
@@ -198,40 +238,40 @@ template_cen='CENa_brainmaskero2.nii'
 fslmerge -tr ${template_networks} ${template_dmn} ${template_cen} 1
 
 # Warp template to native space (based on the resting state data used for ICA)
-template2example_func=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/template_networks2example_func.nii.gz
-flirt -in ${template_networks} -ref ${examplefunc} -out ${template2example_func} -init ${standard2example_func_mat} -applyxfm
+#template2example_func=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/reg/template_networks2example_func.nii.gz
+#flirt -in ${template_networks} -ref ${examplefunc} -out ${template2example_func} -init ${standard2example_func_mat} -applyxfm
 
 # Correlate (spatially) ICA components (not thresholded) with DMN & CEN template files
-fslcc --noabs -p 3 -t 0.05 ${infile} ${template2example_func} >>${correlfile}
+fslcc --noabs -p 3 -t 0.05 ${infile} ${template_networks} >>${correlfile}
 
 # Split ICs to separate files
-split_outfile=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/melodic_IC_
+split_outfile=$ica_directory/melodic_IC_
 fslsplit ${infile} ${split_outfile}
 
 # Selection of ICs most highly correlated with template networks
-python rsn_get.py ${subj} ${ses} ${run}
+python rsn_get.py ${subj}
 
 
 # Set paths for files needed for the next few steps 
 ## Unthresholded masks in native space
-dmn_uthresh=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/dmn_uthresh.nii.gz
-cen_uthresh=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/cen_uthresh.nii.gz
+#dmn_uthresh=$ica_directory/dmn_uthresh.nii.gz
+#cen_uthresh=$ica_directory/cen_uthresh.nii.gz
 
 ## Unthresholded masks in mni space
-dmn_mni_uthresh=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/dmn_mni_uthresh.nii.gz
-cen_mni_uthresh=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/cen_mni_uthresh.nii.gz
+dmn_mni_uthresh=$ica_directory/dmn_mni_uthresh.nii.gz
+cen_mni_uthresh=$ica_directory/cen_mni_uthresh.nii.gz
 
 ## Thresholded masks in MNI space
-dmn_mni_thresh=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/dmn_mni_thresh.nii.gz
-cen_mni_thresh=$subj_dir/rest/$subj'_'$ses'_task-rest_'$run'_bold'.ica/filtered_func_data.ica/cen_mni_thresh.nii.gz
+dmn_mni_thresh=$ica_directory/dmn_mni_thresh.nii.gz
+cen_mni_thresh=$ica_directory/cen_mni_thresh.nii.gz
 
 
 # Hard code the number of voxels desired for each mask
 num_voxels_desired=1000
 
 # register non-thresholded masks to MNI space
-flirt -in  ${dmn_uthresh} -ref ${standard} -out ${dmn_mni_uthresh} -init ${example_func2standard_mat} -applyxfm
-flirt -in  ${cen_uthresh} -ref ${standard} -out ${cen_mni_uthresh} -init ${example_func2standard_mat} -applyxfm
+#flirt -in  ${dmn_uthresh} -ref ${standard} -out ${dmn_mni_uthresh} -init ${example_func2standard_mat} -applyxfm
+#flirt -in  ${cen_uthresh} -ref ${standard} -out ${cen_mni_uthresh} -init ${example_func2standard_mat} -applyxfm
 
 # zero out voxels not included in the template masks (i.e. so we only select voxels within template DMN/CEN)
 fslmaths ${dmn_mni_uthresh} -mul ${template_dmn} ${dmn_mni_uthresh}
